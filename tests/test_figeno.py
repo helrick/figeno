@@ -23,3 +23,25 @@ def test_wgs_symmetrical():
     figeno_make(config_file="THP1_symmetrical_config.json",config={"output":{"file":"THP1_symmetrical_figure2.png"}})
     assert matplotlib.testing.compare.compare_images("THP1_symmetrical_figure.png","THP1_symmetrical_figure2.png",tol=0.1) is None
 
+def test_parse_cigar_for_large_indels():
+    # Test parsing CIGAR string with large indels
+    from figeno.track_alignments import parse_cigar_for_large_indels
+    
+    # Test case 1: No thresholds set
+    assert parse_cigar_for_large_indels("10M5I20M", None, None) == []
+    
+    # Test case 2: Insertion above threshold
+    result = parse_cigar_for_large_indels("10M5I20M", 5, None)
+    assert result == [('I', 5, 10)]
+    
+    # Test case 3: Deletion above threshold
+    result = parse_cigar_for_large_indels("10M8D20M", None, 5)
+    assert result == [('D', 8, 10)]
+    
+    # Test case 4: Multiple indels
+    result = parse_cigar_for_large_indels("10M6I5M8D20M", 5, 5)
+    assert result == [('I', 6, 10), ('D', 8, 15)]
+    
+    # Test case 5: Indels below threshold
+    result = parse_cigar_for_large_indels("10M3I5M4D20M", 5, 5)
+    assert result == []

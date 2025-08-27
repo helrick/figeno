@@ -20,7 +20,8 @@ class alignments_track:
                  group_by="none",exchange_haplotypes=False,show_unphased=True,show_haplotype_colors=False,haplotype_colors=[],haplotype_labels=[],rephase=False,
                  color_by="none",color_unmodified="#1155dd",basemods=[["C","m","#f40202"]],fix_hardclip_basemod=False,rasterize=True,
                  link_splitreads=False, min_splitreads_breakpoints=2,only_show_splitreads=False, only_one_splitread_per_row=True, link_lw=0.2,hgap_bp=100, vgap_frac=0.3,
-                 is_rna=False,fontscale=1,bounding_box=False,height=50,margin_above=1.5,**kwargs):
+                 is_rna=False,fontscale=1,bounding_box=False,height=50,margin_above=1.5,
+                 cigar_insertion_threshold=None, cigar_deletion_threshold=None, indel_color="#FF4444",**kwargs):
         if file=="" or file is None:
             raise KnownException("Please provide a bam file for the alignments track.")
         if not os.path.isfile(file):
@@ -81,6 +82,9 @@ class alignments_track:
         self.bp_counts ={} # map breakpoint to its count
         self.splitreads_coords={}
         self.kwargs=kwargs
+        self.cigar_insertion_threshold = int(cigar_insertion_threshold) if cigar_insertion_threshold is not None else None
+        self.cigar_deletion_threshold = int(cigar_deletion_threshold) if cigar_deletion_threshold is not None else None
+        self.indel_color = indel_color
 
         self.n_reads_basemod=0
         self.n_reads_nobasemod=0
@@ -177,10 +181,10 @@ class alignments_track:
                         for a,b in read.get_aligned_pairs(matches_only=True):
                             if b-last_b > 50:
                                 rect = patches.Rectangle((convert_x(block_start),y_converted),convert_x(last_b)-convert_x(block_start),
-                                                height,color=self.read_color,lw=0)  # color="#fff2cc"
+                                                height,color=color,lw=0)
                                 box["ax"].add_patch(rect)
                                 rect = patches.Rectangle((convert_x(last_b),y_converted_thin),convert_x(b)-convert_x(last_b),
-                                                height*0.1,color=self.read_color,lw=0)  # color="#fff2cc"
+                                                height*0.1,color=color,lw=0)
                                 box["ax"].add_patch(rect)
                                 block_start=b
                             last_b = b
@@ -195,18 +199,157 @@ class alignments_track:
                             read_start,read_end = max(read_start,read_end),min(read_start,read_end)
                         else:
                             read_start,read_end = min(read_start,read_end),max(read_start,read_end)
-                        if ((read.flag&16)==0 and region.orientation=="+") or  ((read.flag&16)!=0 and region.orientation=="-"):
-                            vertices = [(read_start,y_converted) , (read_start,y_converted+height),(read_end,y_converted+height), 
-                                        (read_end+arrow_width,y_converted+height/2),(read_end,y_converted)]
+                        # Determine color first (for both the read and any split read properties)
+                        color = self.readcolor(read, breakpoints=self.breakpoints)
+                        if read.query_name in self.splitreads:
+                            color = self.splitread_color
+
+                        # Create read vertices
+                        if ((read.flag&16)==0 and region.orientation=="+") or ((read.flag&16)!=0 and region.orientation=="-"):
+                            vertices = [(read_start,y_converted),
+                                      (read_start,y_converted+height),
+                                      (read_end,y_converted+height), 
+                                      (read_end+arrow_width,y_converted+height/2),
+                                      (read_end,y_converted)]
                         else:
-                            vertices = [(read_start,y_converted) , (read_start-arrow_width,y_converted+height/2) ,(read_start,y_converted+height),
-                                        (read_end,y_converted+height),(read_end,y_converted)]
+                            vertices = [(read_start,y_converted),
+                                      (read_start-arrow_width,y_converted+height/2),
+                                      (read_start,y_converted+height),
+                                      (read_end,y_converted+height),
+                                      (read_end,y_converted)]
+
+                        # Draw base read first
+                        if "projection" in box and box["projection"]=="polar":
+                            vertices = [(max(box["right"],min(box["left"],u)),v) for (u,v) in vertices]
+                            vertices = interpolate_polar_vertices(vertices)
+                        else:
+                            vertices = [(min(box["right"],max(box["left"],u)),v) for (u,v) in vertices]
+                        polygon = patches.Polygon(vertices, color=color, lw=0, zorder=1)
+                        box["ax"].add_patch(polygon)
+
+                        # Add visualization for large indels if thresholds are set
+                        if (self.cigar_insertion_threshold is not None or self.cigar_deletion_threshold is not None) and read.cigarstring:
+                            indels = parse_cigar_for_large_indels(read.cigarstring, 
+                                                              self.cigar_insertion_threshold, 
+                                                              self.cigar_deletion_threshold)
+                            for op, length, ref_offset in indels:
+                                indel_pos = read.reference_start + ref_offset
+                                indel_x = convert_x(indel_pos)
+                                marker_height = height * 0.8  # Height of the indel marker
+                                
+                                if op == 'I':  # Insertion - upward triangle (since insertions don't have reference length)
+                                    triangle_vertices = [
+                                        (indel_x, y_converted + height + height * 0.1),  # Base center
+                                        (indel_x - height * 0.4, y_converted + height),  # Base left
+                                        (indel_x + height * 0.4, y_converted + height),  # Base right
+                                    ]
+                                    # Create and add the triangle patch
+                                    triangle = patches.Polygon(triangle_vertices, 
+                                                            color=self.indel_color, 
+                                                            alpha=0.8,
+                                                            zorder=2)
+                                    box["ax"].add_patch(triangle)
+                                elif op == 'D':  # Deletion - colored rectangle for full length
+                                    # Calculate the end position
+                                    deletion_end = indel_pos + length
+                                    del_start_x = convert_x(indel_pos)
+                                    del_end_x = convert_x(deletion_end)
+                                    
+                                    # Create rectangle for full deletion length (on top of read)
+                                    rect = patches.Rectangle((del_start_x, y_converted),
+                                                          del_end_x - del_start_x,
+                                                          height,
+                                                          color=self.indel_color,
+                                                          alpha=0.3,
+                                                          zorder=2)
+                                    box["ax"].add_patch(rect)
+                                    
+                                    # Add markers at start and end of deletion
+                                    triangle_vertices_start = [
+                                        (del_start_x, y_converted - height * 0.1),  # Tip
+                                        (del_start_x - height * 0.2, y_converted),  # Base left
+                                        (del_start_x + height * 0.2, y_converted),  # Base right
+                                    ]
+                                    triangle_vertices_end = [
+                                        (del_end_x, y_converted - height * 0.1),  # Tip
+                                        (del_end_x - height * 0.2, y_converted),  # Base left
+                                        (del_end_x + height * 0.2, y_converted),  # Base right
+                                    ]
+                                    
+                                    # Create and add the triangle patches
+                                    for vertices in [triangle_vertices_start, triangle_vertices_end]:
+                                        triangle = patches.Polygon(vertices, 
+                                                                color=self.indel_color, 
+                                                                alpha=0.8,
+                                                                zorder=2)
+                                        box["ax"].add_patch(triangle)
                         if "projection" in box and box["projection"]=="polar":
                             vertices = [(max(box["right"],min(box["left"],u)),v) for (u,v) in vertices]
                             vertices = interpolate_polar_vertices(vertices)
                         else:
                             vertices = [(min(box["right"],max(box["left"],u)),v) for (u,v) in vertices]
                         color=self.readcolor(read,breakpoints=self.breakpoints)
+
+                        # Create and add the base read polygon first
+                        polygon = patches.Polygon(vertices, color=color, lw=0, zorder=1)
+                        box["ax"].add_patch(polygon)
+
+                        # Add visualization for large indels if thresholds are set
+                        if (self.cigar_insertion_threshold is not None or self.cigar_deletion_threshold is not None) and read.cigarstring:
+                            indels = parse_cigar_for_large_indels(read.cigarstring, 
+                                                              self.cigar_insertion_threshold, 
+                                                              self.cigar_deletion_threshold)
+                            for op, length, ref_offset in indels:
+                                indel_pos = read.reference_start + ref_offset
+                                indel_x = convert_x(indel_pos)
+                                marker_height = height * 0.8  # Height of the indel marker
+                                
+                                if op == 'I':  # Insertion - upward triangle
+                                    triangle_vertices = [
+                                        (indel_x, y_converted + height + height * 0.1),  # Base center
+                                        (indel_x - height * 0.4, y_converted + height),  # Base left
+                                        (indel_x + height * 0.4, y_converted + height),  # Base right
+                                    ]
+                                    # Create and add the triangle patch
+                                    triangle = patches.Polygon(triangle_vertices, 
+                                                            color=self.indel_color, 
+                                                            alpha=0.8,
+                                                            zorder=3)
+                                    box["ax"].add_patch(triangle)
+                                elif op == 'D':  # Deletion - colored rectangle for full length
+                                    # Calculate the end position
+                                    deletion_end = indel_pos + length
+                                    del_start_x = convert_x(indel_pos)
+                                    del_end_x = convert_x(deletion_end)
+                                    
+                                    # Create rectangle for full deletion length
+                                    rect = patches.Rectangle((del_start_x, y_converted),
+                                                          del_end_x - del_start_x,
+                                                          height,
+                                                          color=self.indel_color,
+                                                          alpha=0.3,
+                                                          zorder=2)
+                                    box["ax"].add_patch(rect)
+                                    
+                                    # Add small triangles at start and end to make deletion more visible
+                                    triangle_vertices_start = [
+                                        (del_start_x, y_converted - height * 0.1),  # Tip
+                                        (del_start_x - height * 0.2, y_converted),  # Base left
+                                        (del_start_x + height * 0.2, y_converted),  # Base right
+                                    ]
+                                    triangle_vertices_end = [
+                                        (del_end_x, y_converted - height * 0.1),  # Tip
+                                        (del_end_x - height * 0.2, y_converted),  # Base left
+                                        (del_end_x + height * 0.2, y_converted),  # Base right
+                                    ]
+                                    
+                                    # Create and add the triangle patches
+                                    for vertices in [triangle_vertices_start, triangle_vertices_end]:
+                                        triangle = patches.Polygon(vertices, 
+                                                                color=self.indel_color, 
+                                                                alpha=0.8,
+                                                                zorder=3)
+                                        box["ax"].add_patch(triangle)
 
                         # Splitreads
                         if read.query_name in self.splitreads: 
@@ -226,10 +369,6 @@ class alignments_track:
                                 else:
                                     self.add_splitread_coords(read.query_name,qstart,read_start,y_converted+height/2,"left")
                                     self.add_splitread_coords(read.query_name,qend,read_end+arrow_width,y_converted+height/2,"right")
-
-
-                        polygon = patches.Polygon(vertices,color=color,lw=0,zorder=1)
-                        box["ax"].add_patch(polygon)
 
                     if self.color_by=="basemod":
                         if (not "projection" in box) or box["projection"]!="polar": patches_methyl=[]
@@ -452,12 +591,14 @@ class alignments_track:
         print(SNPs)
 
     def readcolor(self,read,breakpoints=[]):
+        # First check if it's one of our tracked split reads
+        if read.query_name in self.splitreads:
+            return self.splitread_color
+        # Then check breakpoints
         for bp in breakpoints:
             if read_overlaps_breakpoint(read,bp):
                 return bp.color
-            if read.has_tag("SA"): 
-                print("AA")
-                return self.splitread_color
+        # Default to base read color
         return self.read_color
 
 
@@ -543,3 +684,37 @@ def cigar2reference_span_length(cigar):
         current_start = current_pos+1
         current_pos = current_start+1
     return length
+
+def parse_cigar_for_large_indels(cigar, ins_threshold=None, del_threshold=None):
+    """Parse CIGAR string and return list of large insertions and deletions.
+    Returns a list of tuples (op, length, ref_pos) where:
+    - op is 'I' for insertion or 'D' for deletion
+    - length is the length of the indel
+    - ref_pos is the reference position where the indel occurs"""
+    indels = []
+    ref_pos = 0  # Reference position counter
+    current_start = 0
+    current_pos = 1
+    
+    while current_pos < len(cigar):
+        # Parse the length
+        while current_pos < len(cigar) and cigar[current_pos].isdigit():
+            current_pos += 1
+        
+        length = int(cigar[current_start:current_pos])
+        op = cigar[current_pos]
+        
+        # Check for insertions and deletions
+        if op == 'I' and ins_threshold is not None and length >= ins_threshold:
+            indels.append(('I', length, ref_pos))
+        elif op == 'D' and del_threshold is not None and length >= del_threshold:
+            indels.append(('D', length, ref_pos))
+            
+        # Update reference position
+        if op not in ['S', 'H', 'I', 'P']:
+            ref_pos += length
+            
+        current_start = current_pos + 1
+        current_pos = current_start + 1
+        
+    return indels
