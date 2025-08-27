@@ -3,6 +3,7 @@ import pysam
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import matplotlib.path as path
+import matplotlib.patheffects as path_effects
 from matplotlib.collections import PatchCollection
 import numpy as np
 import pandas as pd
@@ -237,31 +238,56 @@ class alignments_track:
                                 indel_x = convert_x(indel_pos)
                                 marker_height = height * 0.8  # Height of the indel marker
                                 
-                                if op == 'I':  # Insertion - upward triangle (since insertions don't have reference length)
-                                    triangle_vertices = [
-                                        (indel_x, y_converted + height + height * 0.1),  # Base center
-                                        (indel_x - height * 0.4, y_converted + height),  # Base left
-                                        (indel_x + height * 0.4, y_converted + height),  # Base right
-                                    ]
-                                    # Create and add the triangle patch
-                                    triangle = patches.Polygon(triangle_vertices, 
-                                                            color=self.indel_color, 
-                                                            alpha=0.8,
+                                if op == 'I':  # Insertion - box with length on the read
+                                    # Check if the insertion is within the visible region
+                                    if region.start <= indel_pos <= region.end:
+                                        # Create text with insertion length
+                                        text = f"+{length}"
+                                        
+                                        # Calculate fixed width based on figure dimensions rather than read height
+                                        figure_width = box["right"] - box["left"]
+                                        standard_text_width = figure_width * 0.02  # Fixed percentage of figure width
+                                        text_width = len(text) * standard_text_width  # Scale by text length
+                                        box_height = height  # Keep height relative to read
+                                        
+                                        # Create background box for insertion
+                                        rect = patches.Rectangle((indel_x - text_width/2, y_converted),
+                                                            text_width, box_height,
+                                                            facecolor=self.indel_color,
+                                                            alpha=0.3,
+                                                            edgecolor=self.indel_color,
+                                                            linewidth=0.5,
                                                             zorder=2)
-                                    box["ax"].add_patch(triangle)
+                                        box["ax"].add_patch(rect)
+                                        
+                                        # Add text in the box
+                                        box["ax"].text(indel_x, y_converted + height/2,
+                                                 text,
+                                                 horizontalalignment='center',
+                                                 verticalalignment='center',
+                                                 fontsize=4,
+                                                 color='black',  # Black text for better contrast
+                                                 path_effects=[path_effects.withStroke(linewidth=0.5, 
+                                                                                  foreground=self.indel_color,
+                                                                                  alpha=0.3)],  # Add subtle text outline
+                                                 zorder=3)
                                 elif op == 'D':  # Deletion - colored rectangle for full length
-                                    # Calculate the end position
+                                    # Check if any part of the deletion is within the visible region
                                     deletion_end = indel_pos + length
-                                    del_start_x = convert_x(indel_pos)
-                                    del_end_x = convert_x(deletion_end)
-                                    
-                                    # Create rectangle for full deletion length (on top of read)
-                                    rect = patches.Rectangle((del_start_x, y_converted),
-                                                          del_end_x - del_start_x,
-                                                          height,
-                                                          color=self.indel_color,
-                                                          alpha=0.3,
-                                                          zorder=2)
+                                    if not (deletion_end < region.start or indel_pos > region.end):
+                                        # Calculate visible portion of deletion
+                                        visible_start = max(indel_pos, region.start)
+                                        visible_end = min(deletion_end, region.end)
+                                        del_start_x = convert_x(visible_start)
+                                        del_end_x = convert_x(visible_end)
+                                        
+                                        # Create rectangle for visible portion of deletion
+                                        rect = patches.Rectangle((del_start_x, y_converted),
+                                                            del_end_x - del_start_x,
+                                                            height,
+                                                            color=self.indel_color,
+                                                            alpha=0.3,
+                                                            zorder=2)
                                     box["ax"].add_patch(rect)
                                     
                                     # Add markers at start and end of deletion
@@ -293,63 +319,6 @@ class alignments_track:
                         # Create and add the base read polygon first
                         polygon = patches.Polygon(vertices, color=color, lw=0, zorder=1)
                         box["ax"].add_patch(polygon)
-
-                        # Add visualization for large indels if thresholds are set
-                        if (self.cigar_insertion_threshold is not None or self.cigar_deletion_threshold is not None) and read.cigarstring:
-                            indels = parse_cigar_for_large_indels(read.cigarstring, 
-                                                              self.cigar_insertion_threshold, 
-                                                              self.cigar_deletion_threshold)
-                            for op, length, ref_offset in indels:
-                                indel_pos = read.reference_start + ref_offset
-                                indel_x = convert_x(indel_pos)
-                                marker_height = height * 0.8  # Height of the indel marker
-                                
-                                if op == 'I':  # Insertion - upward triangle
-                                    triangle_vertices = [
-                                        (indel_x, y_converted + height + height * 0.1),  # Base center
-                                        (indel_x - height * 0.4, y_converted + height),  # Base left
-                                        (indel_x + height * 0.4, y_converted + height),  # Base right
-                                    ]
-                                    # Create and add the triangle patch
-                                    triangle = patches.Polygon(triangle_vertices, 
-                                                            color=self.indel_color, 
-                                                            alpha=0.8,
-                                                            zorder=3)
-                                    box["ax"].add_patch(triangle)
-                                elif op == 'D':  # Deletion - colored rectangle for full length
-                                    # Calculate the end position
-                                    deletion_end = indel_pos + length
-                                    del_start_x = convert_x(indel_pos)
-                                    del_end_x = convert_x(deletion_end)
-                                    
-                                    # Create rectangle for full deletion length
-                                    rect = patches.Rectangle((del_start_x, y_converted),
-                                                          del_end_x - del_start_x,
-                                                          height,
-                                                          color=self.indel_color,
-                                                          alpha=0.3,
-                                                          zorder=2)
-                                    box["ax"].add_patch(rect)
-                                    
-                                    # Add small triangles at start and end to make deletion more visible
-                                    triangle_vertices_start = [
-                                        (del_start_x, y_converted - height * 0.1),  # Tip
-                                        (del_start_x - height * 0.2, y_converted),  # Base left
-                                        (del_start_x + height * 0.2, y_converted),  # Base right
-                                    ]
-                                    triangle_vertices_end = [
-                                        (del_end_x, y_converted - height * 0.1),  # Tip
-                                        (del_end_x - height * 0.2, y_converted),  # Base left
-                                        (del_end_x + height * 0.2, y_converted),  # Base right
-                                    ]
-                                    
-                                    # Create and add the triangle patches
-                                    for vertices in [triangle_vertices_start, triangle_vertices_end]:
-                                        triangle = patches.Polygon(vertices, 
-                                                                color=self.indel_color, 
-                                                                alpha=0.8,
-                                                                zorder=3)
-                                        box["ax"].add_patch(triangle)
 
                         # Splitreads
                         if read.query_name in self.splitreads: 
