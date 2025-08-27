@@ -22,7 +22,8 @@ class alignments_track:
                  color_by="none",color_unmodified="#1155dd",basemods=[["C","m","#f40202"]],fix_hardclip_basemod=False,rasterize=True,
                  link_splitreads=False, min_splitreads_breakpoints=2,only_show_splitreads=False, only_one_splitread_per_row=True, link_lw=0.2,hgap_bp=100, vgap_frac=0.3,
                  is_rna=False,fontscale=1,bounding_box=False,height=50,margin_above=1.5,
-                 cigar_insertion_threshold=None, cigar_deletion_threshold=None, indel_color="#FF4444",**kwargs):
+                 cigar_insertion_threshold=None, cigar_deletion_threshold=None, 
+                 insertion_color="#4444FF", deletion_color="#FF4444", **kwargs):
         if file=="" or file is None:
             raise KnownException("Please provide a bam file for the alignments track.")
         if not os.path.isfile(file):
@@ -85,7 +86,8 @@ class alignments_track:
         self.kwargs=kwargs
         self.cigar_insertion_threshold = int(cigar_insertion_threshold) if cigar_insertion_threshold is not None else None
         self.cigar_deletion_threshold = int(cigar_deletion_threshold) if cigar_deletion_threshold is not None else None
-        self.indel_color = indel_color
+        self.insertion_color = insertion_color
+        self.deletion_color = deletion_color
 
         self.n_reads_basemod=0
         self.n_reads_nobasemod=0
@@ -253,9 +255,9 @@ class alignments_track:
                                         # Create background box for insertion
                                         rect = patches.Rectangle((indel_x - text_width/2, y_converted),
                                                             text_width, box_height,
-                                                            facecolor=self.indel_color,
+                                                            facecolor=self.insertion_color,
                                                             alpha=0.3,
-                                                            edgecolor=self.indel_color,
+                                                            edgecolor=self.insertion_color,
                                                             linewidth=0.5,
                                                             zorder=2)
                                         box["ax"].add_patch(rect)
@@ -268,7 +270,7 @@ class alignments_track:
                                                  fontsize=4,
                                                  color='black',  # Black text for better contrast
                                                  path_effects=[path_effects.withStroke(linewidth=0.5, 
-                                                                                  foreground=self.indel_color,
+                                                                                  foreground=self.insertion_color,
                                                                                   alpha=0.3)],  # Add subtle text outline
                                                  zorder=3)
                                 elif op == 'D':  # Deletion - colored rectangle for full length
@@ -285,30 +287,30 @@ class alignments_track:
                                         rect = patches.Rectangle((del_start_x, y_converted),
                                                             del_end_x - del_start_x,
                                                             height,
-                                                            color=self.indel_color,
+                                                            color=self.deletion_color,
                                                             alpha=0.3,
                                                             zorder=2)
-                                    box["ax"].add_patch(rect)
+                                        box["ax"].add_patch(rect)
+                                        
+                                        # Add markers at start and end of deletion
+                                        triangle_vertices_start = [
+                                            (del_start_x, y_converted - height * 0.1),  # Tip
+                                            (del_start_x - height * 0.2, y_converted),  # Base left
+                                            (del_start_x + height * 0.2, y_converted),  # Base right
+                                        ]
+                                        triangle_vertices_end = [
+                                            (del_end_x, y_converted - height * 0.1),  # Tip
+                                            (del_end_x - height * 0.2, y_converted),  # Base left
+                                            (del_end_x + height * 0.2, y_converted),  # Base right
+                                        ]
                                     
-                                    # Add markers at start and end of deletion
-                                    triangle_vertices_start = [
-                                        (del_start_x, y_converted - height * 0.1),  # Tip
-                                        (del_start_x - height * 0.2, y_converted),  # Base left
-                                        (del_start_x + height * 0.2, y_converted),  # Base right
-                                    ]
-                                    triangle_vertices_end = [
-                                        (del_end_x, y_converted - height * 0.1),  # Tip
-                                        (del_end_x - height * 0.2, y_converted),  # Base left
-                                        (del_end_x + height * 0.2, y_converted),  # Base right
-                                    ]
-                                    
-                                    # Create and add the triangle patches
-                                    for vertices in [triangle_vertices_start, triangle_vertices_end]:
-                                        triangle = patches.Polygon(vertices, 
-                                                                color=self.indel_color, 
-                                                                alpha=0.8,
-                                                                zorder=2)
-                                        box["ax"].add_patch(triangle)
+                                        # Create and add the triangle patches
+                                        for vertices in [triangle_vertices_start, triangle_vertices_end]:
+                                            triangle = patches.Polygon(vertices, 
+                                                                    color=self.deletion_color, 
+                                                                    alpha=0.8,
+                                                                    zorder=2)
+                                            box["ax"].add_patch(triangle)
                         if "projection" in box and box["projection"]=="polar":
                             vertices = [(max(box["right"],min(box["left"],u)),v) for (u,v) in vertices]
                             vertices = interpolate_polar_vertices(vertices)
