@@ -184,10 +184,10 @@ class alignments_track:
                         for a,b in read.get_aligned_pairs(matches_only=True):
                             if b-last_b > 50:
                                 rect = patches.Rectangle((convert_x(block_start),y_converted),convert_x(last_b)-convert_x(block_start),
-                                                height,color=color,lw=0)
+                                                height,color=self.read_color,lw=0)  # color="#fff2cc"
                                 box["ax"].add_patch(rect)
                                 rect = patches.Rectangle((convert_x(last_b),y_converted_thin),convert_x(b)-convert_x(last_b),
-                                                height*0.1,color=color,lw=0)
+                                                height*0.1,color=self.read_color,lw=0)  # color="#fff2cc"
                                 box["ax"].add_patch(rect)
                                 block_start=b
                             last_b = b
